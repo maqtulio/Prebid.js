@@ -1,8 +1,9 @@
 import { ortbConverter } from '../libraries/ortbConverter/converter.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
+import { ajax } from '../src/ajax.js';
 import { BANNER } from '../src/mediaTypes.js';
 import { getStorageManager } from '../src/storageManager.js';
-import { deepSetValue, isFn, isPlainObject } from '../src/utils.js';
+import { deepSetValue, isFn, isPlainObject, replaceAuctionPrice, isEmpty } from '../src/utils.js';
 
 const BIDDER_CODE = 'blue';
 const ENDPOINT_URL = 'https://bidder-us-east-1.getblue.io/engine/?src=prebid';
@@ -100,23 +101,42 @@ export const spec = {
   },
 
   // Interpret OpenRTB responses using `ortbConverter`
-  interpretResponse: function (serverResponse, request) {
-    const ortbResponse = serverResponse.body;
+  interpretResponse: (serverResponse) => {
+    if (!serverResponse || isEmpty(serverResponse.body)) return [];
 
-    // Parse the OpenRTB response into Prebid bid responses
-    const prebidResponses = converter.fromORTB({
-      response: ortbResponse,
-      request: request.data,
-    }).bids;
-
-    // Example: Modify bid responses if needed
-    prebidResponses.forEach((bid) => {
-      bid.meta = bid.meta || {};
-      bid.meta.adapterVersion = '1.0.0';
+    let bids = [];
+    serverResponse.body.seatbid.forEach((response) => {
+      response.bid.forEach((bid) => {
+        const mediaType = bid.ext?.mediaType || 'banner';
+        bids.push({
+          ad: replaceAuctionPrice(bid.adm, bid.price),
+          adapterCode: BIDDER_CODE,
+          cpm: bid.price,
+          nurl: replaceAuctionPrice(bid.nurl, bid.price),
+          burl: replaceAuctionPrice(bid.burl, bid.price),
+          creativeId: bid.ext.bms.adId,
+          creative_id: bid.ext.bms.adId,
+          currency: serverResponse.body.cur || 'USD',
+          width: bid.w,
+          height: bid.h,
+          mediaType,
+          netRevenue: true,
+          originalCpm: bid.price,
+          originalCurrency: serverResponse.body.cur || 'USD',
+          requestId: bid.impid,
+          seatBidId: bid.id,
+          ttl: bid.exp, // validar o que vem do bid response
+        });
+      });
     });
-
-    return prebidResponses;
+    return bids;
   },
+  onBidWon: function (bid) {
+    ajax(bid.nurl);
+  },
+  onBidBillable: function (bid) {
+    ajax(bid.burl);
+  }
 };
 
 registerBidder(spec);
